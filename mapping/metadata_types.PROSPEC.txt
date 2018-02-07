@@ -1,0 +1,16 @@
+metadata_variable	type	baseline	useForPERMANOVA	useForLCA	useForNB	useAsConfounder
+SampleType	factor		no		no	
+Group	factor	normal	yes		yes	
+Project	factor					
+Age	numeric		yes			yes
+Sex	factor	F	yes			yes
+BMI	numeric		yes			yes
+Nadir_CD4	numeric		yes			yes
+Current_CD4	numeric		yes			yes
+Diabetes	factor	No	yes			yes
+Hypertension	factor	No	yes			yes
+CoronaryArteryDisease	factor	No	no			
+Dyslipidemia	factor	No	yes			yes
+Etiol	factor	1	no			
+ARV	numeric		yes			yes
+bb_cum	factor	TDF	yes			yes
