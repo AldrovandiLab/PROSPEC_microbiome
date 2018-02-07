@@ -41,7 +41,7 @@ cols.sig <- c("black", "red", "grey"); names(cols.sig) <- c("ns", "sig", "NA")
 #################################################################
 ## handoff to phyloseq
 seqtab.nochim <- readRDS(sprintf("%s/data/merged_seqtab.nochim.rds", indir))
-dada2_fn <- sprintf("%s/data/Carolyn_Yanavich_DADA2.RData", indir)
+dada2_fn <- sprintf("%s/data/DADA2.RData", indir)
 blast_fn <- sprintf("%s/data/BLAST_results.parsed.txt", indir)
 mapping_fn <- sprintf("%s/mapping/CY_Mapping_with_metadata.080817.txt", indir)
 out_txt <- sprintf("%s/phyloseq/phyloseq_output.%s.%s.txt", indir, "PROSPEC", format(Sys.Date(), "%m%d%y"))
@@ -369,8 +369,8 @@ for (distance_metric in distance_metrics) {
 #res$padj <- p.adjust(res$pvalue, method="fdr")
 #res <- res[order(res$padj, decreasing=F),]
 #resSig <- subset(res, padj<0.05)
-#write.table(res, file="/Lab_Share/Carolyn_Yanavich/phyloseq/taxa_significance.L8.txt", quote=F, sep="\t", row.names=F, col.names=T)
-#write.table(resSig, file="/Lab_Share/Carolyn_Yanavich/phyloseq/taxa_significance.L8_sighits.txt", quote=F, sep="\t", row.names=F, col.names=T)
+#write.table(res, file=sprintf("%s/phyloseq/taxa_significance.L8.txt", indir), quote=F, sep="\t", row.names=F, col.names=T)
+#write.table(resSig, file=sprintf("%s/phyloseq/taxa_significance.L8_sighits.txt", indir), quote=F, sep="\t", row.names=F, col.names=T)
 
 ## taxa significance - Species level (ZINB)
 otu.filt <- as.data.frame(otu_table(psPROSPEC.rarefied))
