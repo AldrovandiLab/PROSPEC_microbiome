@@ -19,7 +19,6 @@ library(MASS)
 library(boot)
 library(igraph)
 library(ggfortify)
-library(metagenomeSeq)
 library(stringi)
 library(car)
 library(randomForest)
@@ -40,10 +39,10 @@ cols.sig <- c("black", "red", "grey"); names(cols.sig) <- c("ns", "sig", "NA")
 
 #################################################################
 ## handoff to phyloseq
-seqtab.nochim <- readRDS(sprintf("%s/data/merged_seqtab.nochim.rds", indir))
-dada2_fn <- sprintf("%s/data/DADA2.RData", indir)
-blast_fn <- sprintf("%s/data/BLAST_results.parsed.txt", indir)
-mapping_fn <- sprintf("%s/mapping/CY_Mapping_with_metadata.080817.txt", indir)
+seqtab.nochim <- readRDS(sprintf("%s/fastq/merged_seqtab.nochim.rds", indir))
+dada2_fn <- sprintf("%s/fastq/Carolyn_Yanavich_DADA2.RData", indir)
+blast_fn <- sprintf("%s/fastq/BLAST_results.parsed.txt", indir)
+mapping_fn <- sprintf("%s/CY_Mapping_with_metadata.080817.txt", indir)
 out_txt <- sprintf("%s/phyloseq/phyloseq_output.%s.%s.txt", indir, "PROSPEC", format(Sys.Date(), "%m%d%y"))
 out_pdf <- sprintf("%s/phyloseq/phyloseq_output.%s.%s.pdf", indir, "PROSPEC", format(Sys.Date(), "%m%d%y"))
 
@@ -137,7 +136,7 @@ otus_to_exclude <- names(which(pct_blank > 10))
 
 ##################################################################################
 ## store metadata variables
-metadata_variables <- read.table(sprintf("%s/mapping/metadata_types.PROSPEC.txt", indir), header=T, as.is=T, sep="\t", row.names=1)
+metadata_variables <- read.table(sprintf("%s/metadata_types.PROSPEC.txt", indir), header=T, as.is=T, sep="\t", row.names=1)
 sel <- intersect(rownames(metadata_variables), colnames(mapping))
 metadata_variables <- metadata_variables[sel,, drop=F]
 mapping.sel <- mapping[rownames(sample_data(ps)), sel]
@@ -230,6 +229,7 @@ imputed <- missForest(mapping.sel)$ximp
 sample_data(psPROSPEC) <- imputed
 sample_data(psPROSPEC.relative) <- imputed
 sample_data(psPROSPEC.rarefied) <- imputed
+mapping.sel <- imputed
 
 ## distance matrices
 dm <- list()
@@ -369,8 +369,8 @@ for (distance_metric in distance_metrics) {
 #res$padj <- p.adjust(res$pvalue, method="fdr")
 #res <- res[order(res$padj, decreasing=F),]
 #resSig <- subset(res, padj<0.05)
-#write.table(res, file=sprintf("%s/phyloseq/taxa_significance.L8.txt", indir), quote=F, sep="\t", row.names=F, col.names=T)
-#write.table(resSig, file=sprintf("%s/phyloseq/taxa_significance.L8_sighits.txt", indir), quote=F, sep="\t", row.names=F, col.names=T)
+#write.table(res, file="/Lab_Share/Carolyn_Yanavich/phyloseq/taxa_significance.L8.txt", quote=F, sep="\t", row.names=F, col.names=T)
+#write.table(resSig, file="/Lab_Share/Carolyn_Yanavich/phyloseq/taxa_significance.L8_sighits.txt", quote=F, sep="\t", row.names=F, col.names=T)
 
 ## taxa significance - Species level (ZINB)
 otu.filt <- as.data.frame(otu_table(psPROSPEC.rarefied))
@@ -800,8 +800,233 @@ for (level in c("Species", "Genus")){
 }
 
 
+## DESeq2 analysis of PICRUSt-predicted metagenomes
+library(DESeq2)
+for (lvl in c("L0", "L1", "L2", "L3")) {
+	metagenome <- read.table(sprintf("/Lab_Share/Carolyn_Yanavich/fastq/metagenome_contributions.%s.txt", lvl), header=T, as.is=T, sep="\t", comment.char="", skip=1, quote="", row.names=1)
+	metagenome <- metagenome[, rownames(mapping.sel)]
+	dds <- DESeqDataSetFromMatrix(metagenome, mapping.sel, design= ~ BMI + Age + Sex + Group)
+	#inds <- which(rowSums(counts(dds)>=10) >= 5) # filter to at least 5 samples with 10+ reads
+	#dds <- dds[inds,]
+	dds <- DESeq(dds)
+	for (mvar in c("fibrosis", "steatosis")) {
+		res <- results(dds, name=sprintf("Group_%s_vs_normal", mvar))
+		resSig <- as.data.frame(subset(res, padj<0.1)); resSig <- resSig[order(resSig$log2FoldChange),]; resSig$taxa <- rownames(resSig); resSig$taxa <- factor(resSig$taxa, levels=resSig$taxa); resSig$hdir <- 1-ceiling(sign(resSig$log2FoldChange)/2)
+		if (nrow(resSig) > 0) {
+			p <- ggplot(resSig, aes(x=taxa, y=log2FoldChange)) + geom_bar(stat="identity", fill="#aaaaaa") + geom_text(aes(label=taxa), y=0, size=2, hjust=0.5) + coord_flip() + theme_classic() + ggtitle(sprintf("DESeq2 hits (%s, %s)", lvl, mvar)) + theme(axis.text.y=element_blank())
+			print(p)
+		}
+		write.table(res, file=sprintf("/Lab_Share/Carolyn_Yanavich/phyloseq/PICRUSt_DESeq2.%s.%s.txt", lvl, mvar), quote=F, sep="\t", row.names=T, col.names=T)
+	}
+}
+
+####################################################################
+####################################################################
+####################################################################
+### Cohesion analysis
+
+# Online script to generate cohesion metrics for a set of samples 
+# CMH 06Dec17; cherren@wisc.edu
+
+# User instructions: read in a sample table (in absolute or relative abundance) as object "b".
+# If using a custom correlation matrix, read in that matrix at the designated line.
+# Run the entire script, and the 4 vectors (2 of connectedness and 2 of cohesion) are generated for each sample at the end.
+# Parameters that can be adjusted include pers.cutoff (persistence cutoff for retaining taxa in analysis), 
+# iter (number of iterations for the null model), tax.shuffle (whether to use taxon shuffle or row shuffle randomization), 
+# and use.custom.cors (whether to use a pre-determined correlation matrix)
+
+####################create necessary functions######################
+
+#find the number of zeroes in a vector
+zero <- function(vec){
+  num.zero <- length(which(vec == 0))
+  return(num.zero)
+}
+
+#create function that averages only negative values in a vector
+neg.mean <- function(vector){
+  neg.vals <- vector[which(vector < 0)]
+  n.mean <- mean(neg.vals)
+  if(length(neg.vals) == 0) n.mean <- 0
+  return(n.mean)
+}
+
+#create function that averages only positive values in a vector
+pos.mean <- function(vector){
+  pos.vals <- vector[which(vector > 0)]
+  p.mean <- mean(pos.vals)
+  if(length(pos.vals) == 0) p.mean <- 0
+  return(p.mean)
+}
+
+###################################################################
+###################################################################
+### Workflow options ####
+###################################################################
+###################################################################
+
+## Choose a persistence cutoff (min. fraction of taxon presence) for retaining taxa in the analysis
+pers.cutoff <- 0.10
+## Decide the number of iterations to run for each taxon. (>= 200 is recommended)
+# Larger values of iter mean the script takes longer to run
+iter <- 200
+## Decide whether to use taxon/column shuffle (tax.shuffle = T) or row shuffle algorithm (tax.shuffle = F)
+tax.shuffle <- T
+## Option to input your own correlation table
+# Note that your correlation table MUST have the same number of taxa as the abundance table. 
+# There should be no empty (all zero) taxon vectors in the abundance table. 
+# Even if you input your own correlation table, the persistence cutoff will be applied
+use.custom.cors <- F
+## Number of cores to use for 'mclapply' [set ncores=1 if deterministic results desired]
+ncores <- 16
+
+###################################################################
+###################################################################
+
+# Read in dataset
+## Data should be in a matrix where each row is a sample. 
+b <- t(as.data.frame(otu_table(psPROSPEC)))
+
+# Read in custom correlation matrix, if desired. Must set "use.custom.cors" to TRUE
+if(use.custom.cors == T) {
+  custom.cor.mat <- read.csv("your_path_here.csv", header = T, row.names = 1)
+  custom.cor.mat <- as.matrix(custom.cor.mat)
+  #Check that correlation matrix and abundance matrix have the same dimension
+  print(dim(b)[2] == dim(custom.cor.mat)[2])
+}
 
 
+# Suggested steps to re-format data. At the end of these steps, the data should be in a matrix "c" where there are no
+# empty samples or blank taxon columns. 
+c <- as.matrix(b)
+c <- c[rowSums(c) > 0, colSums(c) > 0]
+
+# Optionally re-order dataset to be in chronological order. Change date format for your data. 
+#c <- c[order(as.Date(rownames(c), format = "%m/%d/%Y")), ]
+
+# Save total number of individuals in each sample in the original matrix. This will be 1 if data are in relative abundance, 
+# but not if matrix c is count data
+rowsums.orig <- rowSums(c)
+
+# Based on persistence cutoff, define a cutoff for the number of zeroes allowed in a taxon's distribution
+zero.cutoff <- ceiling(pers.cutoff * dim(c)[1])
+  
+# Remove taxa that are below the persistence cutoff
+d <- c[ , apply(c, 2, zero) < (dim(c)[1]-zero.cutoff) ]
+# Remove any samples that no longer have any individuals, due to removing taxa
+d <- d[rowSums(d) > 0, ]
+
+#If using custom correlation matrix, need to remove rows/columns corresponding to the taxa below persistence cutoff
+if(use.custom.cors == T){
+  custom.cor.mat.sub <- custom.cor.mat[apply(c, 2, zero) < (dim(c)[1]-zero.cutoff), apply(c, 2, zero) < (dim(c)[1]-zero.cutoff)]
+}
+
+# Create relative abundance matrix.  
+rel.d <- d / rowsums.orig
+# Optionally, check to see what proportion of the community is retained after cutting out taxa
+hist(rowSums(rel.d), breaks=40)
+
+# Create observed correlation matrix
+cor.mat.true <- cor(rel.d)
+
+# Create vector to hold median otu-otu correlations for initial otu
+med.tax.cors <- vector()
+
+# set a seed
+set.seed(sum(dim(rel.d)))
+
+# Run this loop for the null model to get expected pairwise correlations
+# Bypass null model if the option to input custom correlation matrix is TRUE
+if(use.custom.cors == F) {
+if(tax.shuffle) {
+  med.tax.cors <- do.call(cbind, mclapply(1:ncol(rel.d), function(which.taxon) {
+    #create vector to hold correlations from every permutation for each single otu
+    ## perm.cor.vec.mat stands for permuted correlations vector matrix
+    perm.cor.vec.mat <- vector()
+    for(i in 1:iter){
+      # create permuted matrix (with which.taxon column fixed)
+      perm.rel.d <- apply(rel.d, 2, sample)
+      perm.rel.d[, which.taxon] <- rel.d[, which.taxon]
+      rownames(perm.rel.d) <- rownames(rel.d)
+      # Calculate correlation matrix of permuted matrix
+      cor.mat.null <- cor(perm.rel.d)
+      # For each iteration, save the vector of null matrix correlations between focal taxon and other taxa
+      perm.cor.vec.mat <- cbind(perm.cor.vec.mat, cor.mat.null[, which.taxon])
+    }
+    # For large datasets, this can be helpful to know how long this loop will run
+    if(which.taxon %% 20 == 0){print(which.taxon)}
+    # Save the median correlations between the focal taxon and all other taxa  
+    apply(perm.cor.vec.mat, 1, median)
+  }, mc.cores=ncores))
+  
+  
+} else {
+  for(which.taxon in 1:dim(rel.d)[2]){
+  med.tax.cors <- do.call(cbind, mclapply(1:ncol(rel.d), function(which.taxon) {
+    
+    #create vector to hold correlations from every permutation for each single otu
+    ## perm.cor.vec.mat stands for permuted correlations vector matrix
+    perm.cor.vec.mat <- vector()
+    
+    for(i in 1:iter){
+      #Create duplicate matrix to shuffle abundances
+      perm.rel.d <- rel.d 
+      
+      #For each taxon
+      for(j in 1:dim(rel.d)[1]){ 
+        which.replace <- which(rel.d[j, ] > 0 ) 
+        # if the focal taxon is greater than zero, take it out of the replacement vector, so the focal abundance stays the same
+        which.replace.nonfocal <- setdiff(which.replace, which.taxon)
+        
+        #Replace the original taxon vector with a vector where the values greater than 0 have been randomly permuted 
+        perm.rel.d[j, which.replace.nonfocal] <- sample(rel.d[ j, which.replace.nonfocal]) 
+      }
+
+      # Calculate correlation matrix of permuted matrix
+      cor.mat.null <- cor(perm.rel.d)
+      
+      # For each iteration, save the vector of null matrix correlations between focal taxon and other taxa
+      perm.cor.vec.mat <- cbind(perm.cor.vec.mat, cor.mat.null[, which.taxon])
+      
+    }
+    # For large datasets, this can be helpful to know how long this loop will run
+    if(which.taxon %% 20 == 0){print(which.taxon)}
+    # Save the median correlations between the focal taxon and all other taxa  
+    apply(perm.cor.vec.mat, 1, median)
+  }, mc.cores=ncores))
+ }
+}
+  
+# Save observed minus expected correlations. Use custom correlations if use.custom.cors = TRUE
+if(use.custom.cors == T) {
+  obs.exp.cors.mat <- custom.cor.mat.sub
+  } else {
+    obs.exp.cors.mat <- cor.mat.true - med.tax.cors
+  }
+  
+diag(obs.exp.cors.mat) <- 0
+
+#### 
+#### Produce desired vectors of connectedness and cohesion 
+
+# Calculate connectedness by averaging positive and negative observed - expected correlations
+connectedness.pos <- apply(obs.exp.cors.mat, 2, pos.mean)
+connectedness.neg <- apply(obs.exp.cors.mat, 2, neg.mean)
+
+# Calculate cohesion by multiplying the relative abundance dataset by associated connectedness
+cohesion.pos <- rel.d %*% connectedness.pos
+cohesion.neg <- rel.d %*% connectedness.neg
+
+cohesion <- cbind(cohesion.pos, cohesion.neg); colnames(cohesion) <- c("Cohesion.Positive", "Cohesion.Negative")
+cohesion <- merge(cohesion, mapping.sel, by="row.names")
+
+pdf(out_pdf)
+
+for (cohesion_var in c("Cohesion.Positive", "Cohesion.Negative")) {
+	test <- kruskal.test(as.formula(sprintf("%s ~ Group", cohesion_var)), cohesion)
+	p <- ggplot(cohesion, aes_string(x="Group", y=cohesion_var)) + geom_violin() + geom_jitter(position=position_jitter(0.2)) + stat_summary(fun.y=mean, geom="point", shape=23, size=4, fill="red") + ggtitle(sprintf("%s ~ Group (KW p=%.4g)", cohesion_var, test$p.value)) + theme_classic()
+	print(p)
+}
 
 dev.off()
 
