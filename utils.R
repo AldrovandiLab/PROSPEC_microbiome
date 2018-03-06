@@ -74,13 +74,31 @@ renameLevelsWithCounts <- function(fvec, originalLevelsAsNames=FALSE) {
 	return(retval)
 }
 
-# get selected taxonomy, or if unavailable the lowest taxonomy available
-getTaxonomy <- function(otus, tax_tab, level, na_str = c("unidentified", "NA", "")) {
+# get selected taxonomy
+# DEFAULT: do not include entries that are not classified to the requested level (return NA instead)
+getTaxonomy <- function(otus, tax_tab, level, na_str = c("unclassified", "unidentified", "NA", ""), includeUnclassified = FALSE) {
 	ranks <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
 	sel <- ranks[1:match(level, ranks)]
-	inds <- apply(tax_tab[otus,sel], 1, function(x) max(which(!(x %in% na_str))))
-	retval <- as.data.frame(tax_tab)[cbind(otus, ranks[inds])]
-	retval[inds!=match(level, ranks)] <- paste(na_str[1], retval[inds!=match(level, ranks)], sep="_")
+	inds <- apply(tax_tab[otus,sel], 1, function(x) max(which(!(x %in% na_str | is.na(x)))))
+	if (includeUnclassified) {
+		retval <- as.data.frame(tax_tab)[cbind(otus, ranks[inds])]
+		inds.nmatch <- inds!=match(level, ranks)
+		retval[inds.nmatch] <- paste(na_str[1], retval[inds.nmatch], sep=" ")
+		if (level == "Species") {
+			tmp <- as.data.frame(tax_tab)[cbind(otus, "Genus")]
+			retval[!inds.nmatch] <- sprintf("%s %s", tmp[!inds.nmatch], retval[!inds.nmatch])
+		}
+	} else {
+		retval <- as.data.frame(tax_tab)[cbind(otus, level)]
+		if (level == "Species") {
+			tmp <- as.data.frame(tax_tab)[cbind(otus, "Genus")]
+			retval[!is.na(retval)] <- sprintf("%s %s", tmp[!is.na(retval)], retval[!is.na(retval)])
+		}
+	}
 	retval <- gsub("\\[|\\]", "", retval)
 	return(retval)
 }
+
+
+
+
