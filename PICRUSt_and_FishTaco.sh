@@ -77,32 +77,10 @@ biom convert -i ${PROJECT_DIR}/sample_counts.biom -o ${PROJECT_DIR}/sample_count
 # predict traits
 #predict_traits.py -i ${PROJECT_DIR}/format/16S/trait_table.tab -t ${PROJECT_DIR}/format/16S/reference_tree.newick -r ${PROJECT_DIR}/asr/16S_asr_counts.tab -o ${PROJECT_DIR}/predict_traits/16S_precalculated.tab -a -c ${PROJECT_DIR}/asr/asr_ci_16S.tab -l ${PROJECT_DIR}/sample_counts.tab
 predict_traits.py -i ${PROJECT_DIR}/format/16S/trait_table.tab -t ${PROJECT_DIR}/format/16S/reference_tree.newick -r ${PROJECT_DIR}/asr/16S_asr_counts.tab -o ${PROJECT_DIR}/predict_traits/16S_precalculated.tab -l ${PROJECT_DIR}/sample_counts.tab
-#predict_traits.py -i ${PROJECT_DIR}/format/KEGG/trait_table.tab -t ${PROJECT_DIR}/format/KEGG/reference_tree.newick -r ${PROJECT_DIR}/asr/KEGG_asr_counts.tab -o ${PROJECT_DIR}/predict_traits/ko_precalculated.tab -a -c ${PROJECT_DIR}/asr/asr_ci_KEGG.tab -l ${PROJECT_DIR}/sample_counts.tab
-## add KEGG metadata
-#cat kegg_meta >> ${PROJECT_DIR}/predict_traits/ko_precalculated.tab
-
-## predict traits in batches
-mkdir ${PROJECT_DIR}/traits_tmp
-mkdir ${PROJECT_DIR}/predict_traits/tmp/
-# run predict_traits in batches and output to individual files
-BATCH=2000
-for ((i=2, j=$BATCH; j<=$(head -n 1 ${PROJECT_DIR}/format/KEGG/trait_table.tab | wc -w); i=i+$BATCH, j=j+$BATCH));
-do
-	echo "$i - $j IDs"
-	cat ${PROJECT_DIR}/format/KEGG/trait_table.tab | cut -f 1,$i-$j > ${PROJECT_DIR}/traits_tmp/trait_tmp_$i.txt ; 
-	cat ${PROJECT_DIR}/asr/KEGG_asr_counts.tab | cut -f 1,$i-$j > ${PROJECT_DIR}/traits_tmp/asr_tmp_$i.txt ; 
-	predict_traits.py -i ${PROJECT_DIR}/traits_tmp/trait_tmp_$i.txt -t ${PROJECT_DIR}/format/KEGG/reference_tree.newick -r ${PROJECT_DIR}/traits_tmp/asr_tmp_$i.txt -o ${PROJECT_DIR}/predict_traits/tmp/ko_precalculated.$i.tab -l sample_counts.tab
-done
-
-# combine results into single ko_precalculated.tab file
-cut -f 1 ${PROJECT_DIR}/predict_traits/tmp/ko_precalculated.2.tab > ${PROJECT_DIR}/predict_traits/ko_precalculated.tab
-ls ${PROJECT_DIR}/predict_traits/tmp/ | grep "ko_precalculated" | while read f; 
-do 
-	paste ${PROJECT_DIR}/predict_traits/ko_precalculated.tab <(cut -f 2- ${PROJECT_DIR}/predict_traits/tmp/$f) > ${PROJECT_DIR}/predict_traits/results_tmp; 
-	cp ${PROJECT_DIR}/predict_traits/results_tmp ${PROJECT_DIR}/predict_traits/ko_precalculated.tab;  
-done; 
+predict_traits.py -i ${PROJECT_DIR}/format/KEGG/trait_table.tab -t ${PROJECT_DIR}/format/KEGG/reference_tree.newick -r ${PROJECT_DIR}/asr/KEGG_asr_counts.tab -o ${PROJECT_DIR}/predict_traits/ko_precalculated.tab -l ${PROJECT_DIR}/sample_counts.tab
 # add KEGG metadata
-cat ${PICRUST_DATA_DIR}/kegg_meta >> ${PROJECT_DIR}/predict_traits/ko_precalculated.tab
+cp ${PROJECT_DIR}/predict_traits/ko_precalculated.tab ${PROJECT_DIR}/predict_traits/ko_precalculated_no_metadata.tab
+cat kegg_meta >> ${PROJECT_DIR}/predict_traits/ko_precalculated.tab
 
 ## yay, finally actually run PICRUSt
 normalize_by_copy_number.py -i  ${PROJECT_DIR}/sample_counts.biom -o ${PROJECT_DIR}/sample_counts.norm.biom -c ${PROJECT_DIR}/predict_traits/16S_precalculated.tab
@@ -110,11 +88,54 @@ predict_metagenomes.py -i ${PROJECT_DIR}/sample_counts.norm.biom -o ${PROJECT_DI
 # optional: agglomerate counts by KEGG pathway level
 for lvl in 1 2 3 
 do
-	categorize_by_function.py -i ${PROJECT_DIR}/metagenome_contributions.biom -o ${PROJECT_DIR}/metagenome_contributions.L${lvl}.biom -c KEGG_Pathways -l ${lvl}
+	categorize_by_function.py -i ${PROJECT_DIR}/metagenome_contributions.L0.biom -o ${PROJECT_DIR}/metagenome_contributions.L${lvl}.biom -c KEGG_Pathways -l ${lvl}
 	biom convert -i ${PROJECT_DIR}/metagenome_contributions.L${lvl}.biom --to-tsv -o ${PROJECT_DIR}/metagenome_contributions.L${lvl}.txt
 done
 # convert to text format
 biom convert -i ${PROJECT_DIR}/metagenome_contributions.L0.biom --to-tsv -o ${PROJECT_DIR}/metagenome_contributions.L0.txt
 
+
+############################################################################
+### 4. FishTaco with PICRUSt predictions + 16S abundances
+PROJECT_DIR=/Lab_Share/Carolyn_Yanavich/fastq
+
+# convert to relative abundance files
+./rel_abund.R ${PROJECT_DIR}/sample_counts.tab ${PROJECT_DIR}/sample_counts.relabund.tab
+./rel_abund.R ${PROJECT_DIR}/metagenome_contributions.L0.txt ${PROJECT_DIR}/metagenome_contributions.L0.relabund.txt
+
+# generate sample labels files, filter input files for each Group (fibrosis/steatosis)
+mkdir -p /Lab_Share/Carolyn_Yanavich/PICRUSt/
+./make_FishTaco_input.R
+
+# normalize using MUSiCC
+for gr in fibrosis steatosis
+do
+	run_musicc.py -n -c use_generic -o /Lab_Share/Carolyn_Yanavich/PICRUSt/metagenome_contributions.L0.relabund.${gr}.MUSiCC_corrected.txt /Lab_Share/Carolyn_Yanavich/PICRUSt/metagenome_contributions.L0.relabund.${gr}.txt
+done
+
+# map KEGG KOs to pathways prior to differential abundance in FishTaco (NOTE: the map_function_level option does this AFTER DA testing so not helpful)
+for gr in fibrosis steatosis
+do
+	python ~/miniconda3/lib/python3.5/site-packages/fishtaco/compute_pathway_abundance.py -ko /Lab_Share/Carolyn_Yanavich/PICRUSt/metagenome_contributions.L0.relabund.${gr}.MUSiCC_corrected.txt -ko2path ~/miniconda3/lib/python3.5/site-packages/fishtaco/data/KOvsPATHWAY_BACTERIAL_KEGG_2013_07_15.tab --output /Lab_Share/Carolyn_Yanavich/PICRUSt/metagenome_contributions.L0.relabund.${gr}.MUSiCC_corrected.Pathway.txt --output_counts /Lab_Share/Carolyn_Yanavich/PICRUSt/metagenome_contributions.L0.relabund.${gr}.MUSiCC_corrected.Pathway_counts.txt
+done
+
+# in R: convert to relative abundance and filter pathways to only those present with mean relative abundance > 0.1%; also manually uses padj<0.2 cutoff to identify DA functions
+./make_FishTaco_input2.R
+
+# run DA (for testing and viewing full results)
+for gr in fibrosis steatosis
+do
+	python ~/miniconda3/lib/python3.5/site-packages/fishtaco/compute_differential_abundance.py --class /Lab_Share/Carolyn_Yanavich/PICRUSt/sample_labels.${gr}.txt -o /Lab_Share/Carolyn_Yanavich/PICRUSt/DA_functions.${gr}.tab /Lab_Share/Carolyn_Yanavich/PICRUSt/metagenome_contributions.L0.relabund.${gr}.MUSiCC_corrected.Pathway.filtered.txt
+done
+
+# identify DA functions
+#./make_FishTaco_input2.R
+## NOTE: no DA functions identified in either 'fibrosis' or 'steatosis' group
+
+# run FishTaco
+for gr in fibrosis steatosis
+do
+	run_fishtaco.py -ta /Lab_Share/Carolyn_Yanavich/PICRUSt/sample_counts.relabund.${gr}.tab -fu /Lab_Share/Carolyn_Yanavich/PICRUSt/metagenome_contributions.L0.relabund.${gr}.txt -l /Lab_Share/Carolyn_Yanavich/PICRUSt/sample_labels.${gr}.txt -gc ${PROJECT_DIR}/predict_traits/ko_precalculated_no_metadata.tab -op fishtaco_out.${gr} -log
+done
 
 
