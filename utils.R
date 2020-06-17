@@ -77,6 +77,10 @@ renameLevelsWithCounts <- function(fvec, originalLevelsAsNames=FALSE) {
 # get selected taxonomy
 # DEFAULT: do not include entries that are not classified to the requested level (return NA instead)
 getTaxonomy <- function(otus, tax_tab, level, na_str = c("unclassified", "unidentified", "NA", ""), includeUnclassified = FALSE) {
+	# coerce taxonomyTable to data.frame (see https://github.com/joey711/phyloseq/issues/983), otherwise hangs as of phyloseq v1.26
+	if (class(tax_tab) == "taxonomyTable") {
+		tax_tab <- as.data.frame(tax_tab@.Data)
+	}
 	ranks <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
 	sel <- ranks[1:match(level, ranks)]
 	inds <- apply(tax_tab[otus,sel], 1, function(x) max(which(!(x %in% na_str | is.na(x)))))

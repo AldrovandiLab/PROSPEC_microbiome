@@ -28,7 +28,8 @@ library(missForest)
 
 source("utils.R")
 source("mcc.R")
-indir <- "/Lab_Share/Carolyn_Yanavich"
+indir <- "data"
+output_dir <- "output"
 
 distance_metrics <- c("bray", "jaccard", "jsd")
 alpha_metrics <- c("Chao1", "Shannon", "Simpson", "Observed")
@@ -39,17 +40,17 @@ cols.sig <- c("black", "red", "grey"); names(cols.sig) <- c("ns", "sig", "NA")
 
 #################################################################
 ## handoff to phyloseq
-seqtab.nochim <- readRDS(sprintf("%s/fastq/merged_seqtab.nochim.rds", indir))
-dada2_fn <- sprintf("%s/fastq/Carolyn_Yanavich_DADA2.RData", indir)
-blast_fn <- sprintf("%s/fastq/BLAST_results.parsed.txt", indir)
-mapping_fn <- sprintf("%s/CY_Mapping_with_metadata.080817.txt", indir)
-out_txt <- sprintf("%s/phyloseq/phyloseq_output.%s.%s.txt", indir, "PROSPEC", format(Sys.Date(), "%m%d%y"))
-out_pdf <- sprintf("%s/phyloseq/phyloseq_output.%s.%s.pdf", indir, "PROSPEC", format(Sys.Date(), "%m%d%y"))
+seqtab.nochim <- readRDS(sprintf("%s/merged_seqtab.nochim.rds", indir))
+dada2_fn <- sprintf("%s/DADA2.RData", indir)
+blast_fn <- sprintf("%s/BLAST_results.parsed.txt", indir)
+mapping_fn <- sprintf("mapping/CY_Mapping_with_metadata.013019.txt")
+out_txt <- sprintf("%s/phyloseq_output.%s.%s.txt", output_dir, "PROSPEC", format(Sys.Date(), "%m%d%y"))
+out_pdf <- sprintf("%s/phyloseq_output.%s.%s.pdf", output_dir, "PROSPEC", format(Sys.Date(), "%m%d%y"))
 
 ## load all samples run to first examine controls
 load(dada2_fn)
 colnames(taxa) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
-mapping <- read.table(mapping_fn, header=T, sep="\t", comment.char="", row.names=1, as.is=T)
+mapping <- read.table(mapping_fn, header=T, sep="\t", comment.char="", row.names=1, as.is=T, quote="")
 sel <- intersect(rownames(mapping), rownames(seqtab.nochim))
 mapping <- mapping[sel,]
 seqtab.nochim <- seqtab.nochim[sel,]
@@ -66,7 +67,7 @@ mapping$SampleIDstr <- sprintf("%s (%d)", rownames(mapping), rowSums(seqtab.noch
 ps <- phyloseq(otu_table(t(seqtab.nochim), taxa_are_rows=TRUE), sample_data(mapping), tax_table(taxa))
 set.seed(prod(dim(seqtab.nochim)))
 
-color_table <- read.table(sprintf("%s/taxa_coloring.Jeff_022616.txt", indir), header=T, as.is=T, sep="\t", comment.char="")
+color_table <- read.table("taxa_coloring.Jeff_022616.txt", header=T, as.is=T, sep="\t", comment.char="")
 color_table$Family <- gsub("f__", "", color_table$Family)
 coloring <- color_table$Color
 names(coloring) <- color_table$Family
@@ -76,6 +77,8 @@ coloring.group <- c("black", "blue", "green"); names(coloring.group) <- c("norma
 coloring.sampletype <- brewer.pal(4, "Set1"); names(coloring.sampletype) <- c("BacterialMock", "NegativeControl", "PCRBlank", "Stool")
 coloring.bmkamount <- colorRampPalette(c("gray70", "black"), space = "rgb")(7)
 coloring.bmkamount2 <- colorRampPalette(c("white", "black"), space = "rgb")(7)
+dircolors <- c("blue", "red", "grey"); names(dircolors) <- c("down", "up", "NS")
+
 
 ordering.family <- color_table
 ordering.family$Class <- factor(ordering.family$Class, levels=unique(ordering.family$Class))
@@ -136,7 +139,7 @@ otus_to_exclude <- names(which(pct_blank > 10))
 
 ##################################################################################
 ## store metadata variables
-metadata_variables <- read.table(sprintf("%s/metadata_types.PROSPEC.txt", indir), header=T, as.is=T, sep="\t", row.names=1)
+metadata_variables <- read.table(sprintf("%s/metadata_types.PROSPEC.txt", "mapping"), header=T, as.is=T, sep="\t", row.names=1)
 sel <- intersect(rownames(metadata_variables), colnames(mapping))
 metadata_variables <- metadata_variables[sel,, drop=F]
 mapping.sel <- mapping[rownames(sample_data(ps)), sel]
@@ -169,9 +172,9 @@ ordering.pc1 <- names(sort(ordi$vectors[,"Axis.1"]))
 # ordination - all samples
 for (distance_metric in distance_metrics) {
 	ordi <- ordinate(ps.relative, method = "PCoA", distance = distance_metric)
-	p <- plot_ordination(ps.relative, ordi, "samples", color = "SampleType") + theme_classic() + ggtitle(distance_metric)
+	p <- plot_ordination(ps.relative, ordi, "samples", color = "SampleType") + theme_classic() + ggtitle(distance_metric) + stat_ellipse(type="t")
 	print(p)
-	p <- plot_ordination(ps.relative, ordi, "samples", color = "Group") + theme_classic() + ggtitle(distance_metric)
+	p <- plot_ordination(ps.relative, ordi, "samples", color = "Group") + theme_classic() + ggtitle(distance_metric) + stat_ellipse(type="t")
 	print(p)
 }
 
@@ -220,10 +223,13 @@ psPROSPEC <- subset_samples(ps, SampleType=="RectalSwab")
 psPROSPEC.relative <- subset_samples(ps.relative, SampleType=="RectalSwab")
 psPROSPEC.rarefied <- subset_samples(ps.rarefied, SampleType=="RectalSwab")
 
-# impute missing metadata values
+# impute missing metadata values (but not diet data)
+diet_variables <- c("total_calories", "pct_carbohydrates", "pct_protein", "pct_fat", "cholesterol", "total_fiber")
 mapping.sel <- as(sample_data(psPROSPEC), "data.frame")
+mapping.sel <- mapping.sel[, setdiff(colnames(mapping.sel), diet_variables)]
 set.seed(sum(dim(mapping.sel)))
 imputed <- missForest(mapping.sel)$ximp
+imputed <- cbind(imputed, as(sample_data(psPROSPEC), "data.frame")[, diet_variables])
 #mapping.sel[which(is.na(mapping.sel$Age)), "Age"] <- mean(mapping.sel$Age, na.rm=T)
 #mapping.sel[which(is.na(mapping.sel$BMI)), "BMI"] <- mean(mapping.sel$BMI, na.rm=T)
 sample_data(psPROSPEC) <- imputed
@@ -244,6 +250,7 @@ for (distance_metric in distance_metrics) {
 nsamps_threshold <- 10 # number of reads to call a sample positive
 filt_threshold <- 0.1 # fraction of samples that need to be positive to keep an OTU for association testing
 nperm <- 100000
+siglevel <- 0.05
 
 ## PERMANOVA
 sink(out_txt, append=F)
@@ -264,7 +271,7 @@ mapping.sel$SampleID <- rownames(mapping.sel)
 ## PCoA
 for (distance_metric in distance_metrics) {
 	ordi <- ordinate(ps.sel, method = "PCoA", distance = distance_metric)
-	p <- plot_ordination(ps.sel, ordi, "samples", color = "Group") + theme_classic() + ggtitle(distance_metric) + theme_classic()
+	p <- plot_ordination(ps.sel, ordi, "samples", color = "Group") + theme_classic() + ggtitle(distance_metric) + theme_classic() + stat_ellipse(type="t")
 	print(p)
 }
 
@@ -331,46 +338,46 @@ for (distance_metric in distance_metrics) {
 	print(p)
 }
 
-### taxa significance - OTU level (ZINB)
-#otu.filt <- as.data.frame(otu_table(psPROSPEC.rarefied))
-#agg <- otu.filt
-#ftk <- names(which(rowSums(agg)>=100))
-#ftk2 <- names(which(unlist(apply(agg, 1, function(x) length(which(x>=nsamps_threshold)))) > ceiling(filt_threshold*ncol(agg))))
-#agg <- agg[intersect(ftk,ftk2),] # filter out less than 100 reads to reduce testing burden and improve model fit
-#agg$OTU <- rownames(agg)
-#out <- mclapply(agg$OTU, function(f) {
-#	df <- melt(agg[f,]); colnames(df) <- c("OTU", "SampleID", "value"); df$SampleID <- as.character(df$SampleID)
-#	tmp <- {}
-#	print(f)
-#	for (mvar in rownames(subset(metadata_variables, useForNB=="yes"))) {
-#		#print(sprintf("%s %s", f, mvar))
-#		df2 <- df
-#		df2[, mvar] <- mapping.sel[df2$SampleID, mvar]
-#		tt <- try(m <- zeroinfl(as.formula(sprintf("value ~ %s | 1", mvar)), data = df2, dist = "negbin", EM = FALSE, maxit=100), silent=T) # using EM=TRUE causes certain models to hang...
-#		if (class(tt) == "zeroinfl") {
-#			coef <- summary(m)$coefficients$count # rows are [(Intercept), comparisons, Log(theta)], columns are [Estimate, SE, Z, pval]
-#			tmp <- rbind(tmp, cbind(f, paste(tax_table(psPROSPEC.rarefied)[f,1:7], collapse=","), mvar, class(mapping.sel[,mvar]), "ZINB", rownames(coef), coef))
-#		} else if (class(tt) == "try-error") {
-#			tt <- try(m <- glm.nb(as.formula(sprintf("value ~ %s", mvar)), data = df2), silent=T)
-#			if (class(tt)[1] == "negbin") { 
-#				coef <- summary(m)$coefficients # rows are [(Intercept), comparisons], columns are [Estimate, SE, Z, pval]
-#				tmp <- rbind(tmp, cbind(f, paste(tax_table(psPROSPEC.rarefied)[f,1:7], collapse=","), mvar, class(mapping.sel[,mvar]), "NB", rownames(coef), coef))
-#			}
-#		}
-#		#print(sprintf("finished %s %s", f, mvar))
-#	}
-#	print(sprintf("finished %s", f))
-#	tmp
-#}, mc.cores=16)
-#res <- as.data.frame(do.call(rbind, out))
-#colnames(res) <- c("OTU", "taxonomy", "metadata_variable", "class", "method", "coefficient", "Estimate", "SE", "Z", "pvalue")
-#res <- subset(res, !coefficient %in% c("(Intercept)", "Log(theta)")) # remove intercept and log-theta terms before FDR correction
-#res$pvalue <- as.numeric(as.character(res$pvalue))
-#res$padj <- p.adjust(res$pvalue, method="fdr")
-#res <- res[order(res$padj, decreasing=F),]
-#resSig <- subset(res, padj<0.05)
-#write.table(res, file="/Lab_Share/Carolyn_Yanavich/phyloseq/taxa_significance.L8.txt", quote=F, sep="\t", row.names=F, col.names=T)
-#write.table(resSig, file="/Lab_Share/Carolyn_Yanavich/phyloseq/taxa_significance.L8_sighits.txt", quote=F, sep="\t", row.names=F, col.names=T)
+## taxa significance - OTU level (ZINB)
+otu.filt <- as.data.frame(otu_table(psPROSPEC.rarefied))
+agg <- otu.filt
+ftk <- names(which(rowSums(agg)>=100))
+ftk2 <- names(which(unlist(apply(agg, 1, function(x) length(which(x>=nsamps_threshold)))) > ceiling(filt_threshold*ncol(agg))))
+agg <- agg[intersect(ftk,ftk2),] # filter out less than 100 reads to reduce testing burden and improve model fit
+agg$OTU <- rownames(agg)
+out <- mclapply(agg$OTU, function(f) {
+	df <- melt(agg[f,]); colnames(df) <- c("OTU", "SampleID", "value"); df$SampleID <- as.character(df$SampleID)
+	tmp <- {}
+	print(f)
+	for (mvar in rownames(subset(metadata_variables, useForNB=="yes"))) {
+		#print(sprintf("%s %s", f, mvar))
+		df2 <- df
+		df2[, mvar] <- mapping.sel[df2$SampleID, mvar]
+		tt <- try(m <- zeroinfl(as.formula(sprintf("value ~ %s | 1", mvar)), data = df2, dist = "negbin", EM = FALSE, maxit=100), silent=T) # using EM=TRUE causes certain models to hang...
+		if (class(tt) == "zeroinfl") {
+			coef <- summary(m)$coefficients$count # rows are [(Intercept), comparisons, Log(theta)], columns are [Estimate, SE, Z, pval]
+			tmp <- rbind(tmp, cbind(f, paste(tax_table(psPROSPEC.rarefied)[f,1:7], collapse=","), mvar, class(mapping.sel[,mvar]), "ZINB", rownames(coef), coef))
+		} else if (class(tt) == "try-error") {
+			tt <- try(m <- glm.nb(as.formula(sprintf("value ~ %s", mvar)), data = df2), silent=T)
+			if (class(tt)[1] == "negbin") { 
+				coef <- summary(m)$coefficients # rows are [(Intercept), comparisons], columns are [Estimate, SE, Z, pval]
+				tmp <- rbind(tmp, cbind(f, paste(tax_table(psPROSPEC.rarefied)[f,1:7], collapse=","), mvar, class(mapping.sel[,mvar]), "NB", rownames(coef), coef))
+			}
+		}
+		#print(sprintf("finished %s %s", f, mvar))
+	}
+	print(sprintf("finished %s", f))
+	tmp
+}, mc.cores=16)
+res <- as.data.frame(do.call(rbind, out))
+colnames(res) <- c("OTU", "taxonomy", "metadata_variable", "class", "method", "coefficient", "Estimate", "SE", "Z", "pvalue")
+res <- subset(res, !coefficient %in% c("(Intercept)", "Log(theta)")) # remove intercept and log-theta terms before FDR correction
+res$pvalue <- as.numeric(as.character(res$pvalue))
+res$padj <- p.adjust(res$pvalue, method="fdr")
+res <- res[order(res$padj, decreasing=F),]
+resSig <- subset(res, padj<0.05)
+write.table(res, file=sprintf("%s/taxa_significance.L8.txt", output_dir), quote=F, sep="\t", row.names=F, col.names=T)
+write.table(resSig, file=sprintf("%s/taxa_significance.L8_sighits.txt", output_dir), quote=F, sep="\t", row.names=F, col.names=T)
 
 ## taxa significance - Species level (ZINB)
 otu.filt <- as.data.frame(otu_table(psPROSPEC.rarefied))
@@ -422,7 +429,7 @@ res$pvalue <- as.numeric(as.character(res$pvalue))
 # p-value adjust
 res$padj <- p.adjust(res$pvalue, method="fdr")
 res <- res[order(res$padj, decreasing=F),]
-write.table(res, file=sprintf("%s/phyloseq/taxa_significance.L7.txt", indir), quote=F, sep="\t", row.names=F, col.names=T)
+write.table(res, file=sprintf("%s/taxa_significance.L7.txt", output_dir), quote=F, sep="\t", row.names=F, col.names=T)
 
 ## taxa significance - Genus level (ZINB)
 otu.filt <- as.data.frame(otu_table(psPROSPEC.rarefied))
@@ -474,7 +481,7 @@ res$pvalue <- as.numeric(as.character(res$pvalue))
 # p-value adjust
 res$padj <- p.adjust(res$pvalue, method="fdr")
 res <- res[order(res$padj, decreasing=F),]
-write.table(res, file=sprintf("%s/phyloseq/taxa_significance.L6.txt", indir), quote=F, sep="\t", row.names=F, col.names=T)
+write.table(res, file=sprintf("%s/taxa_significance.L6.txt", output_dir), quote=F, sep="\t", row.names=F, col.names=T)
 
 ## taxa significance - Family level (ZINB)
 otu.filt <- as.data.frame(otu_table(psPROSPEC.rarefied))
@@ -526,7 +533,7 @@ res$pvalue <- as.numeric(as.character(res$pvalue))
 # p-value adjust
 res$padj <- p.adjust(res$pvalue, method="fdr")
 res <- res[order(res$padj, decreasing=F),]
-write.table(res, file=sprintf("%s/phyloseq/taxa_significance.L5.txt", indir), quote=F, sep="\t", row.names=F, col.names=T)
+write.table(res, file=sprintf("%s/taxa_significance.L5.txt", output_dir), quote=F, sep="\t", row.names=F, col.names=T)
 
 taxlevel_lookup <- c("L5", "L6", "L7")
 names(taxlevel_lookup) <- c("Family", "Genus", "Species")
@@ -534,16 +541,16 @@ names(taxlevel_lookup) <- c("Family", "Genus", "Species")
 ## ZINB results
 for (level in c("Family", "Genus")) {
 	taxlevel <- taxlevel_lookup[level]
-	res <- read.table(sprintf("%s/phyloseq/taxa_significance.%s.txt", indir, taxlevel), header=T, sep="\t", as.is=T, quote="")
+	res <- read.table(sprintf("%s/taxa_significance.%s.txt", output_dir, taxlevel), header=T, sep="\t", as.is=T, quote="")
 	res$Estimate <- as.numeric(res$Estimate); res$EstimateWeight <- ifelse(is.na(res$Estimate), 0.5, res$Estimate)
 	res$EstimateColor <- ifelse(res$Estimate>0, "red", "blue"); res$EstimateColor[which(is.na(res$EstimateColor))] <- "black"
 	resSig <- subset(res, padj<0.1)
-#	df <- dcast(resSig, OTU ~ coefficient, value.var="Z"); rownames(df) <- df$OTU; df <- df[,-1,drop=F]; df <- t(as.matrix(df))
-#	df2 <- df; df2[which(is.na(df2))] <- 0
+	df <- dcast(resSig, OTU ~ coefficient, value.var="Z"); rownames(df) <- df$OTU; df <- df[,-1,drop=F]; df <- t(as.matrix(df))
+	df2 <- df; df2[which(is.na(df2))] <- 0
 #	heatmap.2(df, Rowv=F, Colv=F, dendrogram="none", trace="none", col=colorRampPalette(c("blue", "white","red"))(150), margins=c(10,10), cexCol=0.8, cexRow=0.8, sepwidth=c(0.02,0.02), colsep=1:ncol(df), rowsep=1:nrow(df), sepcolor="grey")
 #	heatmap.2(df2, Rowv=T, Colv=F, dendrogram="row", trace="none", col=colorRampPalette(c("blue", "white","red"))(150), margins=c(10,10), cexCol=0.8, cexRow=0.8, sepwidth=c(0.02,0.02), colsep=1:ncol(df), rowsep=1:nrow(df), sepcolor="grey")
 #	heatmap.2(df2, Rowv=F, Colv=T, dendrogram="column", trace="none", col=colorRampPalette(c("blue", "white","red"))(150), margins=c(10,10), cexCol=0.8, cexRow=0.8, sepwidth=c(0.02,0.02), colsep=1:ncol(df), rowsep=1:nrow(df), sepcolor="grey")
-#	heatmap.2(df2, Rowv=T, Colv=T, dendrogram="both", trace="none", col=colorRampPalette(c("blue", "white","red"))(150), margins=c(10,10), cexCol=0.8, cexRow=0.8, sepwidth=c(0.02,0.02), colsep=1:ncol(df), rowsep=1:nrow(df), sepcolor="grey")
+	heatmap.2(df2, Rowv=T, Colv=T, dendrogram="both", trace="none", col=colorRampPalette(c("blue", "white","red"))(150), margins=c(10,10), cexCol=0.8, cexRow=0.8, sepwidth=c(0.02,0.02), colsep=1:ncol(df), rowsep=1:nrow(df), sepcolor="grey")
 	
 	# also draw violin plots of distributions
 	ps.sel <- psPROSPEC.relative
@@ -617,12 +624,12 @@ for (level in c("Species", "Genus")){
 #			}, mc.cores=ncores )
 #		collated.cv <- do.call(cbind, out)
 
-#		write.table(collated.importance, file=sprintf("%s/phyloseq/randomForest.%s.%s.importance.txt", indir, mvar_level, level), quote=F, sep="\t", row.names=T, col.names=F)
-#		write.table(collated.cv, file=sprintf("%s/phyloseq/randomForest.%s.%s.cv.txt", indir, mvar_level, level), quote=F, sep="\t", row.names=T, col.names=F)
+#		write.table(collated.importance, file=sprintf("%s/randomForest.%s.%s.importance.txt", output_dir, mvar_level, level), quote=F, sep="\t", row.names=T, col.names=F)
+#		write.table(collated.cv, file=sprintf("%s/randomForest.%s.%s.cv.txt", output_dir, mvar_level, level), quote=F, sep="\t", row.names=T, col.names=F)
 #		## END BLOCK TO COMMENT ##
 		
-		collated.importance <- read.table(sprintf("%s/phyloseq/randomForest.%s.%s.importance.txt", indir, mvar_level, level), header=F, as.is=T, sep="\t", row.names=1)
-		collated.cv <- read.table(sprintf("%s/phyloseq/randomForest.%s.%s.cv.txt", indir, mvar_level, level), header=F, as.is=T, sep="\t", row.names=1)
+		collated.importance <- read.table(sprintf("%s/randomForest.%s.%s.importance.txt", output_dir, mvar_level, level), header=F, as.is=T, sep="\t", row.names=1)
+		collated.cv <- read.table(sprintf("%s/randomForest.%s.%s.cv.txt", output_dir, mvar_level, level), header=F, as.is=T, sep="\t", row.names=1)
 		importance.mean <- rowMeans(collated.importance)
 		importance.sd <- unlist(apply(collated.importance, 1, sd))
 		cv.mean <- rowMeans(collated.cv)
@@ -636,8 +643,8 @@ for (level in c("Species", "Genus")){
 		## after running for the first time, COMMENT OUT THIS BLOCK ##
 		# using a sparse model with N predictors
 #		sparseRF <- randomForest(x=data.sel[, names(importance.mean[inds])], y=response, ntree=10000, importance=T)
-#		save(sparseRF, file=sprintf("%s/phyloseq/randomForest.%s.%s.model", indir, mvar_level, level))
-		load(sprintf("%s/phyloseq/randomForest.%s.%s.model", indir, mvar_level, level))
+#		save(sparseRF, file=sprintf("%s/randomForest.%s.%s.model", output_dir, mvar_level, level))
+		load(sprintf("%s/randomForest.%s.%s.model", output_dir, mvar_level, level))
 		# accuracy of final sparseRF model
 		pred <- predict(sparseRF, type="prob")
 		pred_df <- data.frame(SampleID=rownames(pred), predicted=colnames(pred)[apply(pred, 1, function(x) which.max(x))], true=response[rownames(pred)], stringsAsFactors=F); pred_df$predicted <- factor(pred_df$predicted, levels=levels(pred_df$true))
@@ -648,7 +655,7 @@ for (level in c("Species", "Genus")){
 		df <- confusion_matrix
 		p <- qplot(1:10, 1:10, geom = "blank") + theme_bw() + ggtitle(sprintf("confusion matrix (%s, %s) (accuracy = %.2f%%, MCC = %.4f)", mvar_level, level, accuracy, mccvalue)) + theme(line = element_blank()) + annotation_custom(grob = tableGrob(df), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf)
 		print(p)
-		write.table(confusion_matrix, file=sprintf("%s/phyloseq/randomForest.%s.%s.confusion_matrix.txt", indir, mvar_level, level), quote=F, sep="\t", row.names=T, col.names=T)
+		write.table(confusion_matrix, file=sprintf("%s/randomForest.%s.%s.confusion_matrix.txt", output_dir, mvar_level, level), quote=F, sep="\t", row.names=T, col.names=T)
 		# ROC analysis
 		if (nlevels(response)==2) {
 			pred <- predict(sparseRF, type="prob")
@@ -659,7 +666,7 @@ for (level in c("Species", "Genus")){
 		}
 		## END BLOCK TO COMMENT ##
 		
-		load(sprintf("%s/phyloseq/randomForest.%s.%s.model", indir, mvar_level, level))
+		load(sprintf("%s/randomForest.%s.%s.model", output_dir, mvar_level, level))
 		# plotting - per-group sparse model
 		df <- data.frame(m=cv.mean, sd=cv.sd, numvar=as.numeric(names(cv.mean)))
 		colnames(df) <- c("CV_error", "CV_stddev", "num_variables")
@@ -667,7 +674,7 @@ for (level in c("Species", "Genus")){
 		
 		# plotting - per-group variables
 		df <- data.frame(OTU=factor(names(importance.mean)[inds], levels=rev(names(importance.mean)[inds])), importance=importance.mean[inds], sd=importance.sd[inds])
-		res <- read.table(sprintf("%s/phyloseq/taxa_significance.%s.txt", indir, taxlevel_lookup[level]), header=T, sep="\t", as.is=T, quote="")
+		res <- read.table(sprintf("%s/taxa_significance.%s.txt", output_dir, taxlevel_lookup[level]), header=T, sep="\t", as.is=T, quote="")
 		res <- subset(res, coefficient == paste("Group", mvar_level, sep="")); rownames(res) <- res$OTU
 		df$Z <- res[as.character(df$OTU), "Z"]; df$padj <- res[as.character(df$OTU), "padj"]
 		df$OTU_string <- sprintf("%s (Z=%.4g, padj=%.4g)", df$OTU, df$Z, df$padj)
@@ -695,8 +702,9 @@ mapping.sel <- as(sample_data(ps.sel), "data.frame")
 for (level in c("Species", "Genus")){
   otu.filt <- as.data.frame(otu_table(ps.sel))
   otu.filt.abundance <- normalizeByCols(otu.filt)
-  otu.filt[[level]] <- getTaxonomy(otus=rownames(otu.filt), tax_tab=tax_table(ps.sel), level=level)
-  otu.filt.abundance[[level]] <- getTaxonomy(otus=rownames(otu.filt), tax_tab=tax_table(ps.sel), level=level)
+  taxlist <- getTaxonomy(otus=rownames(otu.filt), tax_tab=tax_table(ps.sel), level=level)
+  otu.filt[[level]] <- taxlist
+  otu.filt.abundance[[level]] <- taxlist
   # rename Prevotella_6, etc -> Prevotella
   otu.filt[[level]] <- gsub("_\\d$", "", otu.filt[[level]])
   otu.filt.abundance[[level]] <- gsub("_\\d$", "", otu.filt.abundance[[level]])
@@ -731,12 +739,12 @@ for (level in c("Species", "Genus")){
 #		}, mc.cores=ncores )
 #	collated.cv <- do.call(cbind, out)
 
-#	write.table(collated.importance, file=sprintf("%s/phyloseq/randomForest.%s.%s.importance.txt", indir, "multiclass", level), quote=F, sep="\t", row.names=T, col.names=F)
-#	write.table(collated.cv, file=sprintf("%s/phyloseq/randomForest.%s.%s.cv.txt", indir, "multiclass", level), quote=F, sep="\t", row.names=T, col.names=F)
+#	write.table(collated.importance, file=sprintf("%s/randomForest.%s.%s.importance.txt", output_dir, "multiclass", level), quote=F, sep="\t", row.names=T, col.names=F)
+#	write.table(collated.cv, file=sprintf("%s/randomForest.%s.%s.cv.txt", output_dir, "multiclass", level), quote=F, sep="\t", row.names=T, col.names=F)
 #	## END BLOCK TO COMMENT ##
 	
-	collated.importance <- read.table(sprintf("%s/phyloseq/randomForest.%s.%s.importance.txt", indir, "multiclass", level), header=F, as.is=T, sep="\t", row.names=1)
-	collated.cv <- read.table(sprintf("%s/phyloseq/randomForest.%s.%s.cv.txt", indir, "multiclass", level), header=F, as.is=T, sep="\t", row.names=1)
+	collated.importance <- read.table(sprintf("%s/randomForest.%s.%s.importance.txt", output_dir, "multiclass", level), header=F, as.is=T, sep="\t", row.names=1)
+	collated.cv <- read.table(sprintf("%s/randomForest.%s.%s.cv.txt", output_dir, "multiclass", level), header=F, as.is=T, sep="\t", row.names=1)
 	importance.mean <- rowMeans(collated.importance)
 	importance.sd <- unlist(apply(collated.importance, 1, sd))
 	cv.mean <- rowMeans(collated.cv)
@@ -750,8 +758,8 @@ for (level in c("Species", "Genus")){
 	## after running for the first time, COMMENT OUT THIS BLOCK ##
 	# using a sparse model with N predictors
 #	sparseRF <- randomForest(x=data.sel[, names(importance.mean[inds])], y=response, ntree=10000, importance=T)
-#	save(sparseRF, file=sprintf("%s/phyloseq/randomForest.%s.%s.model", indir, "multiclass", level))
-	load(sprintf("%s/phyloseq/randomForest.%s.%s.model", indir, "multiclass", level))
+#	save(sparseRF, file=sprintf("%s/randomForest.%s.%s.model", output_dir, "multiclass", level))
+	load(sprintf("%s/randomForest.%s.%s.model", output_dir, "multiclass", level))
 	# accuracy of final sparseRF model
 	pred <- predict(sparseRF, type="prob")
 	pred_df <- data.frame(SampleID=rownames(pred), predicted=colnames(pred)[apply(pred, 1, function(x) which.max(x))], true=response[rownames(pred)], stringsAsFactors=F); pred_df$predicted <- factor(pred_df$predicted, levels=levels(pred_df$true))
@@ -763,7 +771,7 @@ for (level in c("Species", "Genus")){
 	df <- cbind(confusion_matrix, class_errors[rownames(confusion_matrix)])
 	p <- qplot(1:10, 1:10, geom = "blank") + theme_bw() + ggtitle(sprintf("confusion matrix (%s, %s) (accuracy = %.2f%%, MCC = %.4f)", "multiclass", level, accuracy, mccvalue)) + theme(line = element_blank()) + annotation_custom(grob = tableGrob(df), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf)
 	print(p)
-	write.table(confusion_matrix, file=sprintf("%s/phyloseq/randomForest.%s.%s.confusion_matrix.txt", indir, "multiclass", level), quote=F, sep="\t", row.names=T, col.names=T)
+	write.table(confusion_matrix, file=sprintf("%s/randomForest.%s.%s.confusion_matrix.txt", output_dir, "multiclass", level), quote=F, sep="\t", row.names=T, col.names=T)
 	# ROC analysis
 	if (nlevels(response)==2) {
 		pred <- predict(sparseRF, type="prob")
@@ -774,7 +782,7 @@ for (level in c("Species", "Genus")){
 	}
 	## END BLOCK TO COMMENT ##
 	
-	load(sprintf("%s/phyloseq/randomForest.%s.%s.model", indir, "multiclass", level))
+	load(sprintf("%s/randomForest.%s.%s.model", output_dir, "multiclass", level))
 	# plotting - per-group sparse model
 	df <- data.frame(m=cv.mean, sd=cv.sd, numvar=as.numeric(names(cv.mean)))
 	colnames(df) <- c("CV_error", "CV_stddev", "num_variables")
@@ -782,19 +790,28 @@ for (level in c("Species", "Genus")){
 	
 	# plotting - per-group variables
 	df <- data.frame(OTU=factor(names(importance.mean)[inds], levels=rev(names(importance.mean)[inds])), importance=importance.mean[inds], sd=importance.sd[inds])
-	res <- read.table(sprintf("%s/phyloseq/taxa_significance.%s.txt", indir, taxlevel_lookup[level]), header=T, sep="\t", as.is=T, quote="")
+	res <- read.table(sprintf("%s/taxa_significance.%s.txt", output_dir, taxlevel_lookup[level]), header=T, sep="\t", as.is=T, quote="")
 	res <- res[grep("Group", res$coefficient),]
 	res <- aggregate(padj ~ OTU, res, min); rownames(res) <- res$OTU
 	df$padj <- res[as.character(df$OTU), "padj"]
 	df$OTU_string <- sprintf("%s (min padj=%.4g)", df$OTU, df$padj)
 	df$sig <- ifelse(df$padj < 0.1, "sig", "ns"); df$sig[which(is.na(df$sig))] <- "ns"
 	print(ggplot(df, aes(x=OTU, y=importance, label=OTU)) + geom_bar(position=position_dodge(), stat="identity", fill="#999999") + geom_errorbar(aes(ymin=importance-sd, ymax=importance+sd), width=.2, position=position_dodge(.9)) + coord_flip() + geom_text(aes(x=OTU, y=0, label=OTU_string, color=sig), size=3, hjust=0) + ggtitle(sprintf("%s explanatory %s", "multiclass", level)) + scale_color_manual(values=cols.sig))
+	# shading rectangles of importance values
+	df.rect <- df
+	df.rect$x <- 1; df.rect$y <- 1:nrow(df.rect)
+	df.rect$importance <- pmin(df.rect$importance, sort(df.rect$importance, decreasing=T)[2]) # censor importance value to 2nd highest level (drops BMI from coloring)
+	p <- ggplot(df.rect, aes(x=x, y=OTU, color=sig, fill=importance)) + geom_tile() + theme_classic() + ggtitle(sprintf("%s - %s explanatory", "multiclass", level)) + scale_fill_gradient(low="white", high="black") + scale_color_manual(values=cols.sig)
+	print(p)
 	# violin plots of relative abundance
 	agg.melt <- agg.melt.stored
 	agg.melt$Group <- droplevels(mapping.sel[agg.melt$SampleID, "Group"])
 	agg.melt <- subset(agg.melt, taxa %in% rownames(df))
 	agg.melt$taxa <- factor(agg.melt$taxa, levels=rownames(df))
 	p <- ggplot(agg.melt, aes(x=Group, y=value, color=Group)) + geom_violin() + geom_point() + facet_wrap(~taxa, scales="free", ncol=3) + theme_classic() + ggtitle(sprintf("Rel. abund. of RF taxa (%s, %s)", "multiclass", level)) + coord_flip()
+	print(p)
+	agg.melt2 <- subset(agg.melt, taxa %in% taxlist)
+	p <- ggplot(agg.melt2, aes(x=taxa, y=value, color=Group)) + geom_violin(position=position_dodge(width=0.7)) + geom_point(position=position_dodge(width=0.7), size=1) + theme_classic() + ggtitle(sprintf("Rel. abund. of RF metabolites (%s, %s)", "multiclass", level)) + coord_flip()
 	print(p)
 	
 }
@@ -803,7 +820,7 @@ for (level in c("Species", "Genus")){
 ## DESeq2 analysis of PICRUSt-predicted metagenomes
 library(DESeq2)
 for (lvl in c("L0", "L1", "L2", "L3")) {
-	metagenome <- read.table(sprintf("/Lab_Share/Carolyn_Yanavich/fastq/metagenome_contributions.%s.txt", lvl), header=T, as.is=T, sep="\t", comment.char="", skip=1, quote="", row.names=1)
+	metagenome <- read.table(sprintf("data/metagenome_contributions.%s.txt", lvl), header=T, as.is=T, sep="\t", comment.char="", skip=1, quote="", row.names=1)
 	metagenome <- metagenome[, rownames(mapping.sel)]
 	dds <- DESeqDataSetFromMatrix(metagenome, mapping.sel, design= ~ BMI + Age + Sex + Group)
 	#inds <- which(rowSums(counts(dds)>=10) >= 5) # filter to at least 5 samples with 10+ reads
@@ -816,8 +833,120 @@ for (lvl in c("L0", "L1", "L2", "L3")) {
 			p <- ggplot(resSig, aes(x=taxa, y=log2FoldChange)) + geom_bar(stat="identity", fill="#aaaaaa") + geom_text(aes(label=taxa), y=0, size=2, hjust=0.5) + coord_flip() + theme_classic() + ggtitle(sprintf("DESeq2 hits (%s, %s)", lvl, mvar)) + theme(axis.text.y=element_blank())
 			print(p)
 		}
-		write.table(res, file=sprintf("/Lab_Share/Carolyn_Yanavich/phyloseq/PICRUSt_DESeq2.%s.%s.txt", lvl, mvar), quote=F, sep="\t", row.names=T, col.names=T)
+		write.table(res, file=sprintf("%s/PICRUSt_DESeq2.%s.%s.txt", output_dir, lvl, mvar), quote=F, sep="\t", row.names=T, col.names=T)
 	}
+}
+
+
+
+##########################################################################################
+## Dietary analysis
+mapping.sel <- as(sample_data(psPROSPEC.relative), "data.frame")
+subjects_to_exclude <- unique(rownames(which(is.na(mapping.sel), arr.ind=T)))
+mapping.sel <- mapping.sel[setdiff(rownames(mapping.sel), subjects_to_exclude),]
+psdiet.relative <- prune_samples(rownames(mapping.sel), psPROSPEC.relative)
+psdiet.rarefied <- prune_samples(rownames(mapping.sel), psPROSPEC.rarefied)
+
+
+## distance matrices
+dm <- list()
+dm[["diet"]] <- list()
+for (distance_metric in distance_metrics) {
+	dm[["diet"]][[distance_metric]] <- as.matrix(distance(psdiet.relative, method=distance_metric))
+}
+
+## PERMANOVA
+sink(out_txt, append=T)
+print("PERMANOVA on dietary samples")
+for (distance_metric in distance_metrics) {
+	print(distance_metric)
+	form <- as.formula(sprintf("as.dist(dm[[\"diet\"]][[distance_metric]]) ~ %s", paste(diet_variables, collapse="+")))
+	res <- adonis(form , data=as(sample_data(psPROSPEC.relative), "data.frame"), permutations=999)
+	print(res)
+}
+sink()
+
+## alpha diversity
+adiv <- estimate_richness(psdiet.rarefied, measures=alpha_metrics)
+adiv$SampleID <- rownames(adiv)
+adiv <- merge(adiv, mapping.sel, by="row.names"); rownames(adiv) <- adiv$SampleID
+res <- {}
+for (mvar in diet_variables) {
+	plotlist <- list()
+	for (alpha_metric in alpha_metrics) {
+		test <- cor.test(as.formula(sprintf("~ %s + %s", alpha_metric, mvar)), adiv, method="spearman")
+		p <- ggplot(adiv, aes_string(x=mvar, y=alpha_metric)) + geom_point() + stat_smooth() + theme_classic() + ggtitle(sprintf("%s by %s (%s p=%.4g)", alpha_metric, mvar, test$method, test$p.value)) + theme(title=element_text(size=8))
+		plotlist[[length(plotlist)+1]] <- p
+		res <- rbind(res, c(mvar, alpha_metric, test$method, test$estimate, test$p.value))
+	}
+	multiplot(plotlist=plotlist, cols=2, rows=2)
+}
+res <- as.data.frame(res)
+colnames(res) <- c("variable", "alpha_metric", "method", "estimate", "pval")
+res$pval <- as.numeric(as.character(res$pval))
+res$padj <- p.adjust(res$pval)
+res <- res[order(res$pval),]
+write.table(res, file=sprintf("%s/adiv.diet.txt", output_dir), quote=F, sep="\t", row.names=F, col.names=T)
+
+## taxa significance - Genus level (ZINB)
+otu.filt <- as.data.frame(otu_table(psdiet.rarefied))
+otu.filt$Genus <- getTaxonomy(otus=rownames(otu.filt), tax_tab=tax_table(psdiet.rarefied), level="Genus")
+agg <- aggregate(. ~ Genus, otu.filt, sum)
+genera <- agg$Genus
+agg <- agg[,-1]
+rownames(agg) <- genera
+ftk <- names(which(rowSums(agg)>=100))
+ftk2 <- names(which(unlist(apply(agg, 1, function(x) length(which(x>=nsamps_threshold)))) > ceiling(filt_threshold*ncol(agg))))
+agg <- agg[intersect(ftk,ftk2),] # filter out less than 100 reads to reduce testing burden and improve model fit
+# zero-inflated negative binomial or negative binomial regression
+agg$Genus <- rownames(agg)
+res2 <- {}
+out <- mclapply(agg$Genus, function(f) {
+	df <- melt(agg[f,]); colnames(df) <- c("Genus", "SampleID", "value"); df$SampleID <- as.character(df$SampleID)
+	tmp <- {}
+	print(f)
+	nsamps_detected <- length(which(df$value>=nsamps_threshold))
+	for (mvar in diet_variables) {
+		#print(sprintf("%s %s", f, mvar))
+		df2 <- df
+		df2[, mvar] <- mapping.sel[df2$SampleID, mvar]
+		tt <- try(m <- zeroinfl(as.formula(sprintf("value ~ %s | 1", mvar)), data = df2, dist = "negbin", EM = FALSE, maxit=100), silent=T) # using EM=TRUE causes certain models to hang...
+		if (class(tt) == "zeroinfl") {
+			coef <- summary(m)$coefficients$count # rows are [(Intercept), comparisons, Log(theta)], columns are [Estimate, SE, Z, pval]
+			tmp <- rbind(tmp, cbind(f, f, nsamps_detected, mvar, class(mapping.sel[,mvar]), "ZINB", rownames(coef), coef))
+		} else if (class(tt) == "try-error") {
+			tt <- try(m <- glm.nb(as.formula(sprintf("value ~ %s", mvar)), data = df2), silent=T)
+			if (class(tt)[1] == "negbin") { 
+				coef <- summary(m)$coefficients # rows are [(Intercept), comparisons], columns are [Estimate, SE, Z, pval]
+				tmp <- rbind(tmp, cbind(f, f, nsamps_detected, mvar, class(mapping.sel[,mvar]), "NB", rownames(coef), coef))
+			}
+		}
+		#print(sprintf("finished %s %s", f, mvar))
+	}
+	print(sprintf("finished %s", f))
+	tmp
+}, mc.cores=16)
+res <- as.data.frame(do.call(rbind, out))
+colnames(res) <- c("OTU", "taxonomy", "nsamps_detected", "metadata_variable", "class", "method", "coefficient", "Estimate", "SE", "Z", "pvalue")
+# remove intercept, log-theta, and confounder terms before FDR correction
+to_remove <- colSums(do.call(rbind, lapply(c("(Intercept)", "Log(theta)", rownames(subset(metadata_variables, useAsConfounder=="yes"))), function(conf) {grepl(conf, res$coefficient, fixed=T)}))) > 0
+res <- res[!to_remove,]
+res$pvalue <- as.numeric(as.character(res$pvalue))
+res$Estimate <- as.numeric(as.character(res$Estimate)); res$SE <- as.numeric(as.character(res$SE))
+# p-value adjust
+res$padj <- p.adjust(res$pvalue, method="fdr")
+res <- res[order(res$padj, decreasing=F),]
+write.table(res, file=sprintf("%s/taxa_significance_diet.L6.txt", output_dir), quote=F, sep="\t", row.names=F, col.names=T)
+# forest plots
+for (mv in levels(res$metadata_variable)) {
+	res.sel <- subset(res, metadata_variable==mv); res.sel <- res.sel[order(res.sel$Estimate),]
+	res.sel$taxonomy <- factor(res.sel$taxonomy, levels=res.sel$taxonomy)
+	res.sel$dir <- ifelse(res.sel$padj < siglevel, ifelse(sign(res.sel$Estimate)==1, "up", "down"), "NS")
+	lims <- max(abs(res.sel$Estimate) + abs(res.sel$SE))*1.2
+	inds_to_remove <- which(is.na(res.sel$Z))
+	res.sel <- res.sel[setdiff(1:nrow(res.sel), inds_to_remove),]
+	p <- ggplot(res.sel, aes(x=taxonomy, y=Estimate, color=dir)) + geom_point() + geom_errorbar(aes(x=taxonomy, ymin=Estimate-SE, max=Estimate+SE), width=0.2) + geom_hline(yintercept=0) + theme_classic() + ggtitle(sprintf("%s (%s)", "ZINB hits", mv)) + coord_flip() + scale_color_manual(values=dircolors) + ylim(c(-lims, lims))
+	print(p)
 }
 
 ####################################################################
@@ -938,64 +1067,64 @@ set.seed(sum(dim(rel.d)))
 # Run this loop for the null model to get expected pairwise correlations
 # Bypass null model if the option to input custom correlation matrix is TRUE
 if(use.custom.cors == F) {
-if(tax.shuffle) {
-  med.tax.cors <- do.call(cbind, mclapply(1:ncol(rel.d), function(which.taxon) {
-    #create vector to hold correlations from every permutation for each single otu
-    ## perm.cor.vec.mat stands for permuted correlations vector matrix
-    perm.cor.vec.mat <- vector()
-    for(i in 1:iter){
-      # create permuted matrix (with which.taxon column fixed)
-      perm.rel.d <- apply(rel.d, 2, sample)
-      perm.rel.d[, which.taxon] <- rel.d[, which.taxon]
-      rownames(perm.rel.d) <- rownames(rel.d)
-      # Calculate correlation matrix of permuted matrix
-      cor.mat.null <- cor(perm.rel.d)
-      # For each iteration, save the vector of null matrix correlations between focal taxon and other taxa
-      perm.cor.vec.mat <- cbind(perm.cor.vec.mat, cor.mat.null[, which.taxon])
-    }
-    # For large datasets, this can be helpful to know how long this loop will run
-    if(which.taxon %% 20 == 0){print(which.taxon)}
-    # Save the median correlations between the focal taxon and all other taxa  
-    apply(perm.cor.vec.mat, 1, median)
-  }, mc.cores=ncores))
-  
-  
-} else {
-  for(which.taxon in 1:dim(rel.d)[2]){
-  med.tax.cors <- do.call(cbind, mclapply(1:ncol(rel.d), function(which.taxon) {
-    
-    #create vector to hold correlations from every permutation for each single otu
-    ## perm.cor.vec.mat stands for permuted correlations vector matrix
-    perm.cor.vec.mat <- vector()
-    
-    for(i in 1:iter){
-      #Create duplicate matrix to shuffle abundances
-      perm.rel.d <- rel.d 
-      
-      #For each taxon
-      for(j in 1:dim(rel.d)[1]){ 
-        which.replace <- which(rel.d[j, ] > 0 ) 
-        # if the focal taxon is greater than zero, take it out of the replacement vector, so the focal abundance stays the same
-        which.replace.nonfocal <- setdiff(which.replace, which.taxon)
-        
-        #Replace the original taxon vector with a vector where the values greater than 0 have been randomly permuted 
-        perm.rel.d[j, which.replace.nonfocal] <- sample(rel.d[ j, which.replace.nonfocal]) 
-      }
+	if(tax.shuffle) {
+		med.tax.cors <- do.call(cbind, mclapply(1:ncol(rel.d), function(which.taxon) {
+		  #create vector to hold correlations from every permutation for each single otu
+		  ## perm.cor.vec.mat stands for permuted correlations vector matrix
+		  perm.cor.vec.mat <- vector()
+		  for(i in 1:iter){
+		    # create permuted matrix (with which.taxon column fixed)
+		    perm.rel.d <- apply(rel.d, 2, sample)
+		    perm.rel.d[, which.taxon] <- rel.d[, which.taxon]
+		    rownames(perm.rel.d) <- rownames(rel.d)
+		    # Calculate correlation matrix of permuted matrix
+		    cor.mat.null <- cor(perm.rel.d)
+		    # For each iteration, save the vector of null matrix correlations between focal taxon and other taxa
+		    perm.cor.vec.mat <- cbind(perm.cor.vec.mat, cor.mat.null[, which.taxon])
+		  }
+		  # For large datasets, this can be helpful to know how long this loop will run
+		  if(which.taxon %% 20 == 0){print(which.taxon)}
+		  # Save the median correlations between the focal taxon and all other taxa  
+		  apply(perm.cor.vec.mat, 1, median)
+		}, mc.cores=ncores))
+	} else {
+		for(which.taxon in 1:dim(rel.d)[2]){
+		med.tax.cors <- do.call(cbind, mclapply(1:ncol(rel.d), function(which.taxon) {
+		  
+		  #create vector to hold correlations from every permutation for each single otu
+		  ## perm.cor.vec.mat stands for permuted correlations vector matrix
+		  perm.cor.vec.mat <- vector()
+		  
+		  for(i in 1:iter){
+		    #Create duplicate matrix to shuffle abundances
+		    perm.rel.d <- rel.d 
+		    
+		    #For each taxon
+		    for(j in 1:dim(rel.d)[1]){ 
+		      which.replace <- which(rel.d[j, ] > 0 ) 
+		      # if the focal taxon is greater than zero, take it out of the replacement vector, so the focal abundance stays the same
+		      which.replace.nonfocal <- setdiff(which.replace, which.taxon)
+		      
+		      #Replace the original taxon vector with a vector where the values greater than 0 have been randomly permuted 
+		      perm.rel.d[j, which.replace.nonfocal] <- sample(rel.d[ j, which.replace.nonfocal]) 
+		    }
 
-      # Calculate correlation matrix of permuted matrix
-      cor.mat.null <- cor(perm.rel.d)
-      
-      # For each iteration, save the vector of null matrix correlations between focal taxon and other taxa
-      perm.cor.vec.mat <- cbind(perm.cor.vec.mat, cor.mat.null[, which.taxon])
-      
-    }
-    # For large datasets, this can be helpful to know how long this loop will run
-    if(which.taxon %% 20 == 0){print(which.taxon)}
-    # Save the median correlations between the focal taxon and all other taxa  
-    apply(perm.cor.vec.mat, 1, median)
-  }, mc.cores=ncores))
- }
+		    # Calculate correlation matrix of permuted matrix
+		    cor.mat.null <- cor(perm.rel.d)
+		    
+		    # For each iteration, save the vector of null matrix correlations between focal taxon and other taxa
+		    perm.cor.vec.mat <- cbind(perm.cor.vec.mat, cor.mat.null[, which.taxon])
+		    
+		  }
+		  # For large datasets, this can be helpful to know how long this loop will run
+		  if(which.taxon %% 20 == 0){print(which.taxon)}
+		  # Save the median correlations between the focal taxon and all other taxa  
+		  apply(perm.cor.vec.mat, 1, median)
+		}, mc.cores=ncores))
+	 }
+	}
 }
+
   
 # Save observed minus expected correlations. Use custom correlations if use.custom.cors = TRUE
 if(use.custom.cors == T) {
@@ -1019,8 +1148,6 @@ cohesion.neg <- rel.d %*% connectedness.neg
 
 cohesion <- cbind(cohesion.pos, cohesion.neg); colnames(cohesion) <- c("Cohesion.Positive", "Cohesion.Negative")
 cohesion <- merge(cohesion, mapping.sel, by="row.names")
-
-pdf(out_pdf)
 
 for (cohesion_var in c("Cohesion.Positive", "Cohesion.Negative")) {
 	test <- kruskal.test(as.formula(sprintf("%s ~ Group", cohesion_var)), cohesion)
